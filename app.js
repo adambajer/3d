@@ -1,13 +1,14 @@
-// Assumes that THREE, THREE.OBJLoader, THREE.MTLLoader, THREE.PointerLockControls, 
-// THREE.OrbitControls, and nipplejs are already loaded.
+// Assumes that THREE, THREE.OBJLoader, THREE.MTLLoader, THREE.OrbitControls, and nipplejs are already loaded.
 
 class ModelLoader {
     constructor(renderContainer) {
       this.renderContainer = renderContainer;
+  
+      // Create the scene.
       this.scene = new THREE.Scene();
       this.scene.background = new THREE.Color(0xe0e0e0);
   
-      // Setup camera (we’ll update its position once the model is loaded)
+      // Setup camera.
       this.camera = new THREE.PerspectiveCamera(
         50,
         renderContainer.clientWidth / renderContainer.clientHeight,
@@ -15,70 +16,149 @@ class ModelLoader {
         1000
       );
       this.camera.position.set(0, 0, 0);
+      this.camera.up.set(0, 1, 0); // always keep up vector
       this.camera.lookAt(0, 0, 0);
   
-      // Setup renderer
+      // Setup renderer.
       this.renderer = new THREE.WebGLRenderer({ antialias: true });
       this.renderer.setSize(renderContainer.clientWidth, renderContainer.clientHeight);
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderContainer.appendChild(this.renderer.domElement);
   
-      // Add floor and lights
+      // Add floor and lights.
       this.createInfiniteFloor();
       this.addLights();
   
-      // Setup OrbitControls (default navigation mode)
+      // Setup OrbitControls (default navigation mode).
       this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.25;
       this.controls.target.set(0, 0, 0);
       this.controls.update();
   
-      // First-person (walking) settings – we’ll use pointer lock for look‑around.
+      // First-person (walking) settings.
       this.isFirstPerson = false;
       this.firstPersonSettings = {
         moveSpeed: 0.02,
         direction: new THREE.Vector3(),
         groundLevel: 0,
       };
-      this.pointerLockControls = null;
-      this.initPointerLock();
   
-      // Mobile device orientation (for mobile look mode)
+      // Save the original camera view when switching modes.
+      this.originalCameraPosition = null;
+      this.originalControlsTarget = null;
+      this.originalCameraFOV = null;
+  
+      // Configurable offset for first-person start (relative to model center).
+      this.firstPersonStartOffset = { x: -1, y: 0.1, z: -1 };
+  
+      // Will be set once the model is loaded.
+      this.firstPersonStartPosition = null;
+      // Blue marker for the start position.
+      this.firstPersonMarker = null;
+  
+      // For first-person horizontal look:
+      // We'll use a yaw value (in radians) that is updated by mouse movement.
+      this.yaw = 0;
+      this.lookDistance = 100; // fixed distance to compute the lookAt target
+  
+      // Create a crosshair overlay.
+      this.createCrosshair();
+  
+      // Keyboard input for WSAD.
+      this.keyboard = { w: false, a: false, s: false, d: false };
+      window.addEventListener("keydown", (event) => {
+        if (this.isFirstPerson) {
+          switch (event.key.toLowerCase()) {
+            case "w": this.keyboard.w = true; break;
+            case "a": this.keyboard.a = true; break;
+            case "s": this.keyboard.s = true; break;
+            case "d": this.keyboard.d = true; break;
+          }
+        }
+      });
+      window.addEventListener("keyup", (event) => {
+        if (this.isFirstPerson) {
+          switch (event.key.toLowerCase()) {
+            case "w": this.keyboard.w = false; break;
+            case "a": this.keyboard.a = false; break;
+            case "s": this.keyboard.s = false; break;
+            case "d": this.keyboard.d = false; break;
+          }
+        }
+      });
+  
+      // Pointer lock: for desktop first-person mode.
+      this.onMouseMove = this.onMouseMove.bind(this);
+      document.addEventListener("mousemove", this.onMouseMove, false);
+      document.addEventListener("pointerlockchange", () => {
+        if (document.pointerLockElement !== this.renderer.domElement && this.isFirstPerson) {
+          // If pointer lock is lost, exit first-person mode.
+          this.toggleFirstPerson();
+        }
+      }, false);
+  
+      // Mobile device orientation (for mobile look mode).
       this.isMobileLookEnabled = false;
       this.deviceOrientation = { alpha: 0, beta: 0, gamma: 0 };
-      window.addEventListener(
-        "deviceorientation",
-        (event) => {
-          if (this.isMobileLookEnabled && !this.isFirstPerson) {
-            this.deviceOrientation.alpha = event.alpha;
-            this.deviceOrientation.beta = event.beta;
-            this.deviceOrientation.gamma = event.gamma;
-          }
-        },
-        true
-      );
+      window.addEventListener("deviceorientation", (event) => {
+        if (this.isMobileLookEnabled) {
+          this.deviceOrientation.alpha = event.alpha;
+          this.deviceOrientation.beta = event.beta;
+          this.deviceOrientation.gamma = event.gamma;
+        }
+      }, true);
   
-      // Setup raycaster for part selection
+      // Setup raycaster for part selection.
       this.raycaster = new THREE.Raycaster();
       this.mouse = new THREE.Vector2();
       this.setupPartSelection();
   
-      // Setup virtual joystick for movement (if an element with id "virtual-joystick" exists)
+      // Setup virtual joystick for movement.
       this.setupVirtualJoystick();
   
-      // Movement boundaries (updated when a model is loaded)
+      // Movement boundaries (will be updated when the model is loaded).
       this.sceneBoundaries = {
         min: new THREE.Vector3(),
         max: new THREE.Vector3(),
       };
   
-      // Start the render loop
+      // Start the render loop.
       this.animate();
   
-      // Automatically load the model (adjust the paths as needed)
+      // Automatically load the model.
       this.loadModel("./mapa3dsestava.obj", "./mapa3dsestava.mtl");
+    }
+  
+    createCrosshair() {
+      let crosshair = document.createElement("div");
+      crosshair.id = "crosshair";
+      crosshair.style.position = "absolute";
+      crosshair.style.left = "50%";
+      crosshair.style.top = "50%";
+      crosshair.style.transform = "translate(-50%, -50%)";
+      crosshair.style.color = "white";
+      crosshair.style.fontSize = "32px";
+      crosshair.style.fontWeight = "bold";
+      crosshair.style.pointerEvents = "none";
+      crosshair.innerText = "+";
+      this.renderContainer.style.position = "relative";
+      this.renderContainer.appendChild(crosshair);
+    }
+  
+    onMouseMove(event) {
+      // When in first-person mode with pointer lock active, update the yaw.
+      if (this.isFirstPerson && document.pointerLockElement === this.renderer.domElement) {
+        const sensitivity = 0.002; // adjust sensitivity as needed
+        this.yaw += event.movementX * sensitivity;
+        // Do not change pitch: the camera always remains level.
+        // Compute new lookAt target from the current camera position and yaw.
+        const lookAt = this.camera.position.clone().add(
+          new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw)).multiplyScalar(this.lookDistance)
+        );
+        this.camera.lookAt(lookAt);
+      }
     }
   
     addLights() {
@@ -112,77 +192,6 @@ class ModelLoader {
       this.floor = floor;
     }
   
-    // ----- Pointer Lock Setup for First-Person Look-Around -----
-    initPointerLock() {
-        const havePL = "pointerLockElement" in document ||
-                       "mozPointerLockElement" in document ||
-                       "webkitPointerLockElement" in document;
-        if (havePL) {
-          document.addEventListener(
-            "pointerlockchange",
-            this.onPointerLockChange.bind(this),
-            false
-          );
-          document.addEventListener(
-            "mozpointerlockchange",
-            this.onPointerLockChange.bind(this),
-            false
-          );
-          document.addEventListener(
-            "webkitpointerlockchange",
-            this.onPointerLockChange.bind(this),
-            false
-          );
-        }
-      }
-      
-      onPointerLockChange() {
-        const canvas = this.renderer.domElement;
-        const locked =
-          document.pointerLockElement === canvas ||
-          document.mozPointerLockElement === canvas ||
-          document.webkitPointerLockElement === canvas;
-        if (this.pointerLockControls) {
-          this.pointerLockControls.enabled = locked;
-        }
-      }
-      
-  
-    onPointerLockChange() {
-      const canvas = this.renderer.domElement;
-      const locked =
-        document.pointerLockElement === canvas ||
-        document.mozPointerLockElement === canvas ||
-        document.webkitPointerLockElement === canvas;
-      if (this.pointerLockControls) {
-        this.pointerLockControls.enabled = locked;
-      }
-    }
-  
-    enablePointerLock() {
-        const canvas = this.renderer.domElement;
-        canvas.requestPointerLock =
-          canvas.requestPointerLock ||
-          canvas.mozRequestPointerLock ||
-          canvas.webkitRequestPointerLock;
-        if (canvas.requestPointerLock) {
-          canvas.requestPointerLock();
-        }
-      }
-      
-      disablePointerLock() {
-        document.exitPointerLock =
-          document.exitPointerLock ||
-          document.mozExitPointerLock ||
-          document.webkitExitPointerLock;
-        if (document.exitPointerLock) {
-          document.exitPointerLock();
-        }
-      }
-      
- 
-    // -----------------------------------------------------------
-  
     setupVirtualJoystick() {
       const joystickContainer = document.getElementById("virtual-joystick");
       if (!joystickContainer) return;
@@ -190,13 +199,11 @@ class ModelLoader {
         zone: joystickContainer,
         mode: "static",
         position: { left: "50%", top: "50%" },
-        color: "rgba(100,100,100,0.5)",
-        size: 80,
+        color: "rgba(255,0,0,0.8)",
+        size: 120,
       });
       this.joystick.on("move", (evt, data) => {
         if (this.isFirstPerson) {
-          console.log("Joystick move event fired", data);
-          // Your movement calculations...
           const inputX = data.vector.x / 5;
           const inputY = data.vector.y / 5;
           const forward = new THREE.Vector3();
@@ -212,7 +219,6 @@ class ModelLoader {
           this.firstPersonSettings.direction.copy(moveDir);
         }
       });
-      
       this.joystick.on("end", () => {
         if (this.isFirstPerson) {
           this.firstPersonSettings.direction.set(0, 0, 0);
@@ -221,7 +227,6 @@ class ModelLoader {
     }
   
     setupPartSelection() {
-      // Listen for clicks on the container to perform raycasting
       this.renderContainer.addEventListener("click", (event) => {
         const rect = this.renderContainer.getBoundingClientRect();
         this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -242,7 +247,6 @@ class ModelLoader {
     }
   
     highlightObject(object) {
-      // Reset any previous highlight
       if (this.previousHighlight) {
         this.previousHighlight.material.color.set(this.previousColor);
       }
@@ -252,13 +256,11 @@ class ModelLoader {
     }
   
     loadModel(objPath, mtlPath) {
-      // Remove any existing model
       if (this.currentModel) {
         this.scene.remove(this.currentModel);
       }
       const mtlLoader = new THREE.MTLLoader();
       const objLoader = new THREE.OBJLoader();
-  
       mtlLoader.load(
         mtlPath,
         (materials) => {
@@ -278,29 +280,36 @@ class ModelLoader {
                 }
               });
               this.currentModel = object;
-              // Center and scale the model
-                        // Scale the model so that its largest dimension is 5
-                let box = new THREE.Box3().setFromObject(object);
-                const size = box.getSize(new THREE.Vector3());
-                const maxDim = Math.max(size.x, size.y, size.z);
-                const scaleFactor = 5 / maxDim;
-                object.scale.set(scaleFactor, scaleFactor, scaleFactor);
-
-                // Recompute bounding box after scaling
-                box = new THREE.Box3().setFromObject(object);
-                const center = box.getCenter(new THREE.Vector3());
-
-                // Set the position so that the model is centered horizontally (x and z)
-                // and its lowest point (box.min.y) is aligned with y = 0.
-                object.position.set(-center.x, -box.min.y, -center.z);
-
-                // Update scene boundaries and the ground level (if needed)
-                this.sceneBoundaries.min.copy(box.min);
-                this.sceneBoundaries.max.copy(box.max);
-                this.firstPersonSettings.groundLevel = 0;  // now the model sits on y=0
-
+              // Center and scale the model.
+              let box = new THREE.Box3().setFromObject(object);
+              const size = box.getSize(new THREE.Vector3());
+              const maxDim = Math.max(size.x, size.y, size.z);
+              const scaleFactor = 5 / maxDim;
+              object.scale.set(scaleFactor, scaleFactor, scaleFactor);
+              // Recompute bounding box after scaling.
+              box = new THREE.Box3().setFromObject(object);
+              const center = box.getCenter(new THREE.Vector3());
+              object.position.set(-center.x, -box.min.y, -center.z);
+              // Update scene boundaries and ground level.
+              this.sceneBoundaries.min.copy(box.min);
+              this.sceneBoundaries.max.copy(box.max);
+              this.firstPersonSettings.groundLevel = 0;
               this.scene.add(object);
               this.fitCameraToObject();
+              // Set up the first-person start position.
+              this.firstPersonStartPosition = new THREE.Vector3(
+                center.x + this.firstPersonStartOffset.x,
+                this.firstPersonSettings.groundLevel + this.firstPersonStartOffset.y,
+                center.z + this.firstPersonStartOffset.z
+              );
+              // Create a blue marker at the start position.
+              if (!this.firstPersonMarker) {
+                const markerGeometry = new THREE.SphereGeometry(0.1, 16, 16);
+                const markerMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+                this.firstPersonMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+                this.firstPersonMarker.position.copy(this.firstPersonStartPosition);
+                this.scene.add(this.firstPersonMarker);
+              }
             },
             undefined,
             (error) => {
@@ -321,9 +330,8 @@ class ModelLoader {
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
-      const fov = this.camera.fov * (Math.PI / 180);
-      const cameraDistance = Math.abs(maxDim / (2 * Math.tan(fov / 2))) * 2;
-      // Position the camera so that the model is in view
+      const fovRadians = this.camera.fov * (Math.PI / 180);
+      const cameraDistance = Math.abs(maxDim / (2 * Math.tan(fovRadians / 2))) * 2;
       this.camera.position.copy(center);
       this.camera.position.y += maxDim / 2;
       this.camera.position.z += cameraDistance;
@@ -334,15 +342,29 @@ class ModelLoader {
   
     updateFirstPersonMovement() {
       if (this.isFirstPerson && this.currentModel) {
-        const floorLevel = this.firstPersonSettings.groundLevel;
-        const moveVector = this.firstPersonSettings.direction
-          .clone()
-          .multiplyScalar(this.firstPersonSettings.moveSpeed);
+        // Compute keyboard direction relative to the camera.
+        let forward = new THREE.Vector3();
+        this.camera.getWorldDirection(forward);
+        forward.y = 0;
+        forward.normalize();
+        let right = new THREE.Vector3();
+        right.crossVectors(forward, this.camera.up).normalize();
+        let keyboardDir = new THREE.Vector3();
+        if (this.keyboard.w) keyboardDir.add(forward);
+        if (this.keyboard.s) keyboardDir.sub(forward);
+        if (this.keyboard.a) keyboardDir.sub(right);
+        if (this.keyboard.d) keyboardDir.add(right);
+        if (keyboardDir.length() > 0) keyboardDir.normalize();
+        // Combine joystick and keyboard directions.
+        let combinedDir = new THREE.Vector3();
+        combinedDir.add(this.firstPersonSettings.direction);
+        combinedDir.add(keyboardDir);
+        if (combinedDir.length() > 0) combinedDir.normalize();
+        const moveVector = combinedDir.multiplyScalar(this.firstPersonSettings.moveSpeed);
         const newPos = this.camera.position.clone().add(moveVector);
         if (this.isWithinSceneBoundaries(newPos.x, newPos.z)) {
-          this.camera.position.x = newPos.x;
-          this.camera.position.z = newPos.z;
-          this.camera.position.y = floorLevel + 0.1;
+          this.camera.position.copy(newPos);
+          this.camera.position.y = this.firstPersonSettings.groundLevel + 0.1;
         }
       }
     }
@@ -359,10 +381,14 @@ class ModelLoader {
     }
   
     updateMobileLook() {
-      if (this.isMobileLookEnabled && !this.isFirstPerson) {
-        this.camera.rotation.x = THREE.MathUtils.degToRad(this.deviceOrientation.beta);
-        this.camera.rotation.y = THREE.MathUtils.degToRad(-this.deviceOrientation.gamma);
-        this.camera.rotation.z = THREE.MathUtils.degToRad(this.deviceOrientation.alpha);
+      if (this.isMobileLookEnabled) {
+        const alpha = THREE.MathUtils.degToRad(this.deviceOrientation.alpha || 0);
+        const beta = THREE.MathUtils.degToRad(this.deviceOrientation.beta || 0);
+        const gamma = THREE.MathUtils.degToRad(this.deviceOrientation.gamma || 0);
+        let euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
+        // If in mobile look mode, we only update the yaw (keep pitch = 0)
+        euler.x = 0;
+        this.camera.quaternion.setFromEuler(euler);
       }
     }
   
@@ -376,42 +402,45 @@ class ModelLoader {
       this.renderer.render(this.scene, this.camera);
     }
   
-    // Toggle first-person mode: disable orbit controls, change FOV, and enable pointer lock.
+    // Toggle first-person mode.
+    // When turning on, store the original view, move the camera to the start position,
+    // and request pointer lock for immediate mouse look.
+    // In first-person mode, the camera remains level (perpendicular to ground);
+    // only the look-at target (computed using the stored yaw) changes.
     toggleFirstPerson() {
-        this.isFirstPerson = !this.isFirstPerson;
-        if (this.isFirstPerson) {
-          this.controls.enabled = false;
-          this.camera.fov = 75;
-          this.camera.updateProjectionMatrix();
-          if (!this.pointerLockControls) {
-            // Ensure you have imported or loaded THREE.PointerLockControls correctly.
-            this.pointerLockControls = new THREE.PointerLockControls(
-              this.camera,
-              this.renderer.domElement
-            );
-          }
-          this.enablePointerLock();
-          // Optionally, set a starting position for first-person mode.
-          if (this.currentModel) {
-            const box = new THREE.Box3().setFromObject(this.currentModel);
-            const center = box.getCenter(new THREE.Vector3());
-            this.camera.position.set(
-              center.x,
-              this.firstPersonSettings.groundLevel + 0.05,
-              center.z + 1
-            );
-            this.camera.lookAt(
-              new THREE.Vector3(center.x, this.firstPersonSettings.groundLevel + 0.05, center.z - 5)
-            );
-          }
-        } else {
-          this.camera.fov = 50;
-          this.camera.updateProjectionMatrix();
-          this.controls.enabled = true;
-          this.disablePointerLock();
+      if (!this.isFirstPerson) {
+        if (!this.originalCameraPosition) {
+          this.originalCameraPosition = this.camera.position.clone();
+          this.originalControlsTarget = this.controls.target.clone();
+          this.originalCameraFOV = this.camera.fov;
+        }
+        this.isFirstPerson = true;
+        this.controls.enabled = false;
+        this.camera.fov = 75;
+        this.camera.updateProjectionMatrix();
+        // Reset yaw to current horizontal direction (assume 0 as default).
+        this.yaw = 0;
+        // Move the camera to the first-person start position.
+        this.camera.position.copy(this.firstPersonStartPosition);
+        // Request pointer lock for immediate mouse look.
+        this.renderer.domElement.requestPointerLock();
+        // Update the lookAt target immediately.
+        const lookAt = this.camera.position.clone().add(
+          new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw)).multiplyScalar(this.lookDistance)
+        );
+        this.camera.lookAt(lookAt);
+      } else {
+        this.isFirstPerson = false;
+        this.camera.fov = this.originalCameraFOV;
+        this.camera.updateProjectionMatrix();
+        this.camera.position.copy(this.originalCameraPosition);
+        this.controls.target.copy(this.originalControlsTarget);
+        this.controls.enabled = true;
+        if (document.exitPointerLock) {
+          document.exitPointerLock();
         }
       }
-      
+    }
   }
   
   // ----- Main Script -----
@@ -429,7 +458,6 @@ class ModelLoader {
   
     mobileLookBtn.addEventListener("click", () => {
       modelLoader.isMobileLookEnabled = !modelLoader.isMobileLookEnabled;
-      // Disable OrbitControls when using mobile look mode
       modelLoader.controls.enabled = !modelLoader.isMobileLookEnabled;
     });
   
