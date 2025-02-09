@@ -1,0 +1,187 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Model Interactive Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.0/nipplejs.min.js"></script>
+    <script src="https://threejs.org/examples/js/controls/PointerLockControls.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        html, body { 
+            height: 100%;
+            width: 100%;
+            font-family: Arial, sans-serif; 
+            background-color: #f0f0f0; 
+            overflow: hidden;
+            touch-action: none;
+        }
+        #render-container {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+            background-color: white;
+            overflow: hidden;
+        }
+        .overlay-control {
+            position: absolute;
+            background-color: rgba(255,255,255,0.7);
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 4px;
+            min-width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 10;
+            font-size: 16px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .overlay-control:hover {
+            background-color: rgba(230,230,230,0.9);
+            box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+        }
+        #first-person-btn {
+            top: 10px;
+            left: 10px;
+        }
+        #mobile-look-btn {
+            top: 10px;
+            left: 60px;
+        }
+        #fullscreen-btn {
+            top: 10px;
+            right: 10px;
+        }
+        .file-controls {
+            position: absolute;
+            bottom: 10px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 0 10px;
+        }
+        .file-input-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+        }
+        #load-model-btn {
+            background-color: rgba(100,200,100,0.7);
+            padding: 0 15px;
+            font-size: 14px;
+        }
+        #load-model-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .file-select-btn {
+            position: relative;
+            width: 50px;
+            opacity: 0.7;
+        }
+        .file-select-btn.active {
+            opacity: 1;
+            background-color: rgba(100,200,100,0.7);
+        }
+        .file-type-label {
+            position: absolute;
+            bottom: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: #333;
+            white-space: nowrap;
+        }
+        #part-info, #mode-info, #file-type-info, #error-message {
+            position: absolute;
+            background-color: rgba(255,255,255,0.8);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            z-index: 10;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        #part-info { 
+            bottom: 120px; 
+            left: 10px; 
+        }
+        #mode-info { 
+            bottom: 120px; 
+            right: 10px; 
+        }
+        #file-type-info { 
+            bottom: 160px; 
+            left: 10px; 
+        }
+        #error-message { 
+            bottom: 160px; 
+            right: 10px; 
+            color: red; 
+        }
+        #virtual-joystick {
+            width: 100px;
+            height: 100px;
+            z-index: 20;
+            opacity: 0.7;
+        }#virtual-joystick {
+            position: absolute;
+            bottom: 20px;   /* adjust as needed */
+            left: 20px;     /* adjust as needed */
+            z-index: 1000;  /* high z-index to ensure it's on top */
+            pointer-events: auto; /* ensure it receives pointer events */
+          }
+          
+        #objInput, #mtlInput {
+            display: none;
+        }
+        @media (max-width: 600px) {
+            .overlay-control {
+                min-width: 35px;
+                height: 35px;
+                font-size: 14px;
+            }
+            .file-controls {
+                bottom: 5px;
+                gap: 5px;
+            }
+        }
+    </style>
+    <meta name="theme-color" content="#f0f0f0">
+</head>
+<body>
+    <div id="render-container">
+        <input type="file" id="objInput" accept=".obj">
+        <input type="file" id="mtlInput" accept=".mtl">
+        
+        <button id="first-person-btn" class="overlay-control">👣</button>
+        <button id="mobile-look-btn" class="overlay-control">📱</button>
+        <button id="fullscreen-btn" class="overlay-control">⛶</button>
+        
+        
+        <div class="file-controls">
+     
+            <div id="virtual-joystick"></div>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
