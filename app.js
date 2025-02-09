@@ -17,7 +17,6 @@ class ModelLoader {
       );
       this.camera.position.set(0, 0, 0);
       this.camera.up.set(0, 1, 0);
-      // (We will control camera orientation via quaternion.)
   
       // Setup renderer.
       this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -58,9 +57,6 @@ class ModelLoader {
       // Blue marker for the start position.
       this.firstPersonMarker = null;
   
-      // We'll also create a BoxHelper to draw colored borders around the limited area.
-      this.borderBox = null;
-  
       // For FPS-style rotation, maintain target yaw/pitch and a target quaternion.
       this.yaw = 0;
       this.pitch = 0;
@@ -68,14 +64,17 @@ class ModelLoader {
       this.targetPitch = 0;
       this.targetQuat = new THREE.Quaternion();
       this.mouseSensitivity = 0.002;
+      // Clamp pitch so that it never goes below 0° (cannot look up)
+      // and up to, say, +85° (looking down).
       this.pitchClamp = THREE.MathUtils.degToRad(85);
-      this.lookDistance = 100; // fixed distance for computing forward direction
+      // Set lookDistance to a small fixed value so that the lookAt target is always close.
+      this.lookDistance = 2;
   
-      // Create a crosshair overlay (visible only in first-person mode).
+      // Create a crosshair overlay (only visible in first-person mode).
       this.createCrosshair();
-      // Create a debug overlay to show yaw/pitch.
+      // Create a debug overlay.
       this.createDebugOverlay();
-      // Create a green marker for the computed lookAt target.
+      // Create a green marker to show the computed lookAt target.
       this.lookAtMarker = this.createLookAtMarker();
   
       // Keyboard input for WSAD.
@@ -106,7 +105,6 @@ class ModelLoader {
       document.addEventListener("mousemove", this.onMouseMove, false);
       document.addEventListener("pointerlockchange", () => {
         if (document.pointerLockElement !== this.renderer.domElement && this.isFirstPerson) {
-          // If pointer lock is lost, exit first-person mode.
           this.toggleFirstPerson();
         }
       }, false);
@@ -130,8 +128,9 @@ class ModelLoader {
       // Setup virtual joystick for movement.
       this.setupVirtualJoystick();
   
-      // Movement boundaries (will be updated when the model is loaded).
-      this.sceneBoundaries = { min: new THREE.Vector3(), max: new THREE.Vector3() };
+      // Collision: We will use the model's bounding box to determine if the camera is inside.
+      // We'll update this in loadModel.
+      this.sceneBoundaries = new THREE.Box3();
   
       // Start the render loop.
       this.animate();
@@ -140,6 +139,7 @@ class ModelLoader {
       this.loadModel("./mapa3dsestava.obj", "./mapa3dsestava.mtl");
     }
   
+    // Create a crosshair overlay.
     createCrosshair() {
       let crosshair = document.createElement("div");
       crosshair.id = "crosshair";
@@ -157,6 +157,7 @@ class ModelLoader {
       this.renderContainer.appendChild(crosshair);
     }
   
+    // Create a debug overlay to show yaw and pitch.
     createDebugOverlay() {
       let debugDiv = document.createElement("div");
       debugDiv.id = "debug-info";
@@ -171,6 +172,7 @@ class ModelLoader {
       this.renderContainer.appendChild(debugDiv);
     }
   
+    // Create a green marker to display the computed lookAt target.
     createLookAtMarker() {
       const geom = new THREE.SphereGeometry(0.2, 16, 16);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false });
@@ -180,11 +182,23 @@ class ModelLoader {
       return marker;
     }
   
+    // A simple raycasting method to determine if a point is inside a closed mesh.
+    // Cast a ray in the +X direction and count intersections.
+    isPointInsideMesh(point, mesh) {
+      const raycaster = new THREE.Raycaster();
+      raycaster.set(point, new THREE.Vector3(1, 0, 0));
+      const intersects = raycaster.intersectObject(mesh, true);
+      // If the count is odd, the point is inside.
+      return (intersects.length % 2) === 1;
+    }
+  
     onMouseMove(event) {
       if (this.isFirstPerson && document.pointerLockElement === this.renderer.domElement) {
+        // Update target yaw/pitch.
         this.targetYaw -= event.movementX * this.mouseSensitivity;
         this.targetPitch -= event.movementY * this.mouseSensitivity;
-        this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, -this.pitchClamp, this.pitchClamp);
+        // Clamp pitch to [0, pitchClamp] so it never goes below 0° (cannot look up).
+        this.targetPitch = THREE.MathUtils.clamp(this.targetPitch, 0, this.pitchClamp);
         const euler = new THREE.Euler(this.targetPitch, this.targetYaw, 0, "YXZ");
         this.targetQuat.setFromEuler(euler);
       }
@@ -288,11 +302,6 @@ class ModelLoader {
     loadModel(objPath, mtlPath) {
       if (this.currentModel) {
         this.scene.remove(this.currentModel);
-        // Also remove any previous border.
-        if (this.borderBox) {
-          this.scene.remove(this.borderBox);
-          this.borderBox = null;
-        }
       }
       const mtlLoader = new THREE.MTLLoader();
       const objLoader = new THREE.OBJLoader();
@@ -325,9 +334,9 @@ class ModelLoader {
               box = new THREE.Box3().setFromObject(object);
               const center = box.getCenter(new THREE.Vector3());
               object.position.set(-center.x, -box.min.y, -center.z);
-              // Update scene boundaries and ground level.
-              this.sceneBoundaries.min.copy(box.min);
-              this.sceneBoundaries.max.copy(box.max);
+              // Update scene boundaries.
+              this.sceneBoundaries.copy(box);
+              // Set ground level (assume model sits on y = 0).
               this.firstPersonSettings.groundLevel = 0;
               this.scene.add(object);
               this.fitCameraToObject();
@@ -345,9 +354,6 @@ class ModelLoader {
                 this.firstPersonMarker.position.copy(this.firstPersonStartPosition);
                 this.scene.add(this.firstPersonMarker);
               }
-              // Create a border around the scene boundaries.
-              this.borderBox = new THREE.BoxHelper(object, 0xffff00);
-              this.scene.add(this.borderBox);
             },
             undefined,
             (error) => {
@@ -380,6 +386,7 @@ class ModelLoader {
   
     updateFirstPersonMovement() {
       if (this.isFirstPerson && this.currentModel) {
+        // Compute movement direction.
         let forward = new THREE.Vector3();
         this.camera.getWorldDirection(forward);
         forward.y = 0;
@@ -398,7 +405,11 @@ class ModelLoader {
         if (combinedDir.length() > 0) combinedDir.normalize();
         const moveVector = combinedDir.multiplyScalar(this.firstPersonSettings.moveSpeed);
         const newPos = this.camera.position.clone().add(moveVector);
-        if (this.isWithinSceneBoundaries(newPos.x, newPos.z)) {
+        // Collision detection: Allow movement only if the new point remains inside the model
+        // if the camera is already inside, or outside if the camera is outside.
+        const currentInside = this.isPointInsideMesh(this.camera.position, this.currentModel);
+        const newInside = this.isPointInsideMesh(newPos, this.currentModel);
+        if (currentInside === newInside) {
           this.camera.position.copy(newPos);
           this.camera.position.y = this.firstPersonSettings.groundLevel + 0.1;
         }
@@ -406,14 +417,17 @@ class ModelLoader {
     }
   
     isWithinSceneBoundaries(x, z) {
-      if (!this.currentModel) return true;
-      const padding = 0.5;
-      return (
-        x >= this.sceneBoundaries.min.x - padding &&
-        x <= this.sceneBoundaries.max.x + padding &&
-        z >= this.sceneBoundaries.min.z - padding &&
-        z <= this.sceneBoundaries.max.z + padding
-      );
+      return true; // Not used in this version.
+    }
+  
+    // Simple point-in-mesh test using raycasting.
+    isPointInsideMesh(point, mesh) {
+      const raycaster = new THREE.Raycaster();
+      // Cast a ray from the point in the +X direction.
+      raycaster.set(point, new THREE.Vector3(1, 0, 0));
+      const intersects = raycaster.intersectObject(mesh, true);
+      // If odd number of intersections, point is inside.
+      return (intersects.length % 2) === 1;
     }
   
     updateMobileLook() {
@@ -424,13 +438,12 @@ class ModelLoader {
         const orient = window.orientation ? THREE.MathUtils.degToRad(window.orientation) : 0;
         
         const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
-        const q0 = new THREE.Quaternion();
         const q1 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -orient);
         const targetMobileQuat = new THREE.Quaternion().setFromEuler(euler).multiply(q1);
         
         this.camera.quaternion.slerp(targetMobileQuat, 0.1);
         
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
         const lookAtTarget = this.camera.position.clone().add(forward.multiplyScalar(this.lookDistance));
         
         if (this.lookAtMarker) this.lookAtMarker.position.copy(lookAtTarget);
@@ -448,16 +461,18 @@ class ModelLoader {
       requestAnimationFrame(() => this.animate());
       if (this.isFirstPerson) {
         const damping = 0.1;
+        // Smoothly interpolate yaw and pitch toward target values.
         this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, damping);
         this.pitch = THREE.MathUtils.lerp(this.pitch, this.targetPitch, damping);
-        this.pitch = THREE.MathUtils.clamp(this.pitch, -this.pitchClamp, this.pitchClamp);
+        // Clamp pitch so that it never goes below 0°.
+        this.pitch = THREE.MathUtils.clamp(this.pitch, 0, this.pitchClamp);
         const euler = new THREE.Euler(this.pitch, this.yaw, 0, "YXZ");
         this.targetQuat.setFromEuler(euler);
         this.camera.quaternion.slerp(this.targetQuat, damping);
         
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        // Compute forward direction from camera quaternion.
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
         const lookAtTarget = this.camera.position.clone().add(forward.multiplyScalar(this.lookDistance));
-        
         if (this.lookAtMarker) this.lookAtMarker.position.copy(lookAtTarget);
         
         const normalizedYaw = THREE.MathUtils.radToDeg(THREE.MathUtils.euclideanModulo(this.yaw, 2 * Math.PI)).toFixed(1);
